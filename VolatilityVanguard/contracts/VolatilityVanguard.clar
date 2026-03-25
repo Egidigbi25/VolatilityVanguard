@@ -285,4 +285,65 @@
     (ok (var-get current-fee-bps))
 )
 
+;; ---------------------------------------------------------
+;; AI Oracle Fee Adjustment Function (Newly Added Feature)
+;; ---------------------------------------------------------
+;; This function is exclusively called by authorized AI oracles.
+;; It analyzes off-chain volatility data and submits a new 
+;; optimal fee rate to protect liquidity providers from impermanent loss.
+;; It includes a cooldown mechanism to prevent fee thrashing
+;; and logs the update in the fee-history map for transparency.
+;; The AI considers the volatility index and overall market trend to set fees.
+(define-public (adjust-fee-based-on-volatility (new-fee-bps uint) (volatility-index uint) (market-trend (string-ascii 10)))
+    (let (
+        (current-id (var-get next-update-id))
+        (old-fee (var-get current-fee-bps))
+        (current-block block-height)
+        (last-update (var-get last-update-block))
+    )
+    (begin
+        ;; Security Check 1: Ensure contract is not paused
+        (try! (check-active))
+        
+        ;; Security Check 2: Ensure caller is an authorized AI Oracle
+        (asserts! (is-ai-oracle tx-sender) ERR-NOT-AUTHORIZED)
+        
+        ;; Security Check 3: Ensure fee is within safe bounds to prevent malicious or erroneous spikes
+        (asserts! (<= new-fee-bps MAX-FEE-BPS) ERR-INVALID-FEE)
+        (asserts! (>= new-fee-bps MIN-FEE-BPS) ERR-INVALID-FEE)
+        
+        ;; Security Check 4: Enforce cooldown period to prevent rapid fee manipulation
+        (asserts! (>= current-block (+ last-update UPDATE-COOLDOWN)) ERR-COOLDOWN-ACTIVE)
+        
+        ;; Update the current fee variable
+        (var-set current-fee-bps new-fee-bps)
+        
+        ;; Update the last modified block
+        (var-set last-update-block current-block)
+        
+        ;; Record the historical update for auditing and on-chain analytics
+        (map-set fee-history 
+            { update-id: current-id } 
+            { 
+                oracle: tx-sender,
+                old-fee: old-fee,
+                new-fee: new-fee-bps, 
+                timestamp: current-block, 
+                volatility-index: volatility-index 
+            }
+        )
+        
+        ;; Increment the update ID for the next adjustment
+        (var-set next-update-id (+ current-id u1))
+        
+        ;; Emit success with rich metadata
+        (ok {
+            success: true,
+            update-id: current-id,
+            new-fee: new-fee-bps,
+            trend-logged: market-trend
+        })
+    ))
+)
+
 
